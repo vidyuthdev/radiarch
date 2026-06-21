@@ -93,6 +93,32 @@ def _opentps_diagnostics() -> dict:
     return diag
 
 
+def _default_calibration() -> Any:
+    """Project-default MCsquare CT calibration (cached).
+
+    Loaded once from :class:`ProtonMachineModel` (the vendored UCL_Toshiba
+    calibration) and reused — building it is non-trivial disk I/O.
+    """
+    global _DEFAULT_CALIBRATION
+    if _DEFAULT_CALIBRATION is None:
+        from ...services.machine_model import ProtonMachineModel
+        _DEFAULT_CALIBRATION = ProtonMachineModel.from_default().calibration
+    return _DEFAULT_CALIBRATION
+
+
+def _default_bdl() -> Any:
+    """Project-default Beam Data Library (cached)."""
+    global _DEFAULT_BDL
+    if _DEFAULT_BDL is None:
+        from ...services.machine_model import ProtonMachineModel
+        _DEFAULT_BDL = ProtonMachineModel.from_default().bdl
+    return _DEFAULT_BDL
+
+
+_DEFAULT_CALIBRATION: Any = None
+_DEFAULT_BDL: Any = None
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -187,10 +213,7 @@ class MCsquareEngine:
         # D6.4 — apply scenario perturbations to the *plan* (isocenter
         # shift) and *CT calibration* (density/range scales), never to
         # the input geometry bundle.
-        ct_calibration = self._maybe_clone_calibration(
-            getattr(beam_model, "ct_calibration", None)
-            or getattr(geometry, "ct_calibration", None)
-        )
+        ct_calibration = self._resolve_calibration(beam_model, geometry)
         if scenario is not None:
             self._apply_scenario(plan, ct_image, ct_calibration, scenario)
 
@@ -218,8 +241,8 @@ class MCsquareEngine:
                     mc_calc.ctCalibration = ct_calibration
                 elif hasattr(mc_calc, "calibration"):
                     mc_calc.calibration = ct_calibration
-            # Beam model (BDL) hand-off when provided.
-            bdl = getattr(beam_model, "bdl", None)
+            # Beam model (BDL) hand-off — bundle's, or the project default.
+            bdl = self._resolve_bdl(beam_model)
             if bdl is not None and hasattr(mc_calc, "beamModel"):
                 mc_calc.beamModel = bdl
             # Optional MCsquare runtime knobs (params= overrides).
@@ -274,10 +297,7 @@ class MCsquareEngine:
 
         plan = self._clone_plan(beam_model.plan)
         ct_image = self._clone_ct(geometry.ct_image)
-        ct_calibration = self._maybe_clone_calibration(
-            getattr(beam_model, "ct_calibration", None)
-            or getattr(geometry, "ct_calibration", None)
-        )
+        ct_calibration = self._resolve_calibration(beam_model, geometry)
         if scenario is not None:
             self._apply_scenario(plan, ct_image, ct_calibration, scenario)
 
@@ -295,7 +315,7 @@ class MCsquareEngine:
             # don't set it as an attribute.
             if ct_calibration is not None and hasattr(mc_calc, "ctCalibration"):
                 mc_calc.ctCalibration = ct_calibration
-            bdl = getattr(beam_model, "bdl", None)
+            bdl = self._resolve_bdl(beam_model)
             if bdl is not None and hasattr(mc_calc, "beamModel"):
                 mc_calc.beamModel = bdl
 
@@ -400,6 +420,26 @@ class MCsquareEngine:
             return copy.deepcopy(cal)
         except Exception:  # pragma: no cover
             return cal
+
+    def _resolve_calibration(self, beam_model: Any, geometry: Any) -> Any:
+        """CT calibration from the bundle, or the project-default machine model.
+
+        MCsquare cannot run without an HU→material/stopping-power calibration.
+        Service 2/1 bundles don't carry one yet, so we fall back to
+        ``ProtonMachineModel.from_default().calibration`` (the same default the
+        legacy plan workflow uses) — cloned so per-scenario perturbations never
+        mutate the shared default.
+        """
+        cal = (getattr(beam_model, "ct_calibration", None)
+               or getattr(geometry, "ct_calibration", None))
+        if cal is None:
+            cal = _default_calibration()
+        return self._maybe_clone_calibration(cal)
+
+    @staticmethod
+    def _resolve_bdl(beam_model: Any) -> Any:
+        """Beam Data Library from the bundle, or the project-default BDL."""
+        return getattr(beam_model, "bdl", None) or _default_bdl()
 
     @staticmethod
     def _apply_weights_to_plan(
