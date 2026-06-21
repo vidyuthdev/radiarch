@@ -253,6 +253,16 @@ class GeometryResult(BaseModel):
     structure_masks_uri: str = Field(
         ..., description="URI/path to the multi-label mask volume (NIfTI, uint16)."
     )
+    ct_grid_uri: Optional[str] = Field(
+        default=None,
+        description=(
+            "URI/path to the CT volume in Hounsfield Units (NIfTI, int16), "
+            "resampled to ``grid_spec``. Optional — older geometries cached "
+            "before CT persistence was added will have this set to null; "
+            "engines that require a real CT (e.g. MCsquare) must handle the "
+            "null case explicitly. Populated for all newly-built geometries."
+        ),
+    )
     structure_index: Dict[str, int] = Field(
         ..., description='Canonical name → integer label in the mask volume. 0 = background.'
     )

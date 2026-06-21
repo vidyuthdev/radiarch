@@ -183,8 +183,8 @@ def _walk_layers(beam: Any) -> Tuple[List[float], List[int]]:
             or 0.0
         )
         count = _count_spots(layer)
-        if count == 0 and energy == 0.0:
-            # Bogus layer entry — skip it.
+        # Skip only truly empty layer entries (no energy AND no count).
+        if count == 0 and float(energy) == 0.0:
             continue
         energies.append(float(energy))
         spots.append(int(count))
@@ -192,16 +192,36 @@ def _walk_layers(beam: Any) -> Tuple[List[float], List[int]]:
 
 
 def _count_spots(layer: Any) -> int:
-    """Try several OpenTPS attribute paths to count spots in a layer."""
-    # Most direct: a Python list of spot objects.
+    """Try several OpenTPS attribute paths to count spots in a layer.
+
+    The canonical OpenTPS PlanProtonLayer exposes:
+      * ``spotMUs`` — numpy array of monitor units (one per spot)
+      * ``spotXY`` — list of (x, y) positions
+      * ``numberOfSpots`` — @property returning len(spotXY)
+
+    We check spotMUs first because it's what dose calculation actually
+    consumes (a spot with MU=0 is still a spot but won't deposit dose).
+    """
+    # OpenTPS canonical path: spotMUs is the source of truth.
+    mus = getattr(layer, "spotMUs", None)
+    if mus is not None and hasattr(mus, "__len__"):
+        n = len(mus)
+        if n > 0:
+            return n
+    # spotXY positions (some OpenTPS code paths populate this first).
+    xy = getattr(layer, "spotXY", None)
+    if xy is not None and hasattr(xy, "__len__"):
+        n = len(xy)
+        if n > 0:
+            return n
+    # The @property — works on any OpenTPS version.
+    n = getattr(layer, "numberOfSpots", None)
+    if isinstance(n, int) and n > 0:
+        return n
+    # Legacy / test-double attribute names.
     spots = getattr(layer, "spots", None)
     if spots is not None and hasattr(spots, "__len__"):
         return len(spots)
-    # Some versions expose a count attribute directly.
-    n = getattr(layer, "numberOfSpots", None)
-    if isinstance(n, int):
-        return n
-    # Or a 2D array of (x, y) scan positions.
     pos = getattr(layer, "scanSpotPositions", None)
     if pos is not None and hasattr(pos, "__len__"):
         return len(pos)

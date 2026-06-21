@@ -36,8 +36,28 @@ find "${SITE_PACKAGES}" -maxdepth 1 \
 echo "==> pip uninstall radiarch (ignore-not-found)"
 pip uninstall -y radiarch 2>/dev/null || true
 
-echo "==> pip install -e ${SRC_DIR} $*"
-pip install -e "${SRC_DIR}" "$@"
+# Filter out anything that looks like a leftover shell comment —
+# guards against users pasting commands from markdown into a zsh
+# that doesn't have `interactive_comments` set, where `#` is passed
+# as a literal argument and pip blows up on "Invalid requirement: '#'".
+# Use a safe-with-set-u pattern: only iterate if $# > 0.
+ARGS=()
+if [ "$#" -gt 0 ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      "#"|"#"*) ;;  # skip
+      *) ARGS+=("$arg") ;;
+    esac
+  done
+fi
+
+# Echo with safe expansion (set -u trips on ${ARGS[*]} when empty under bash<4.4).
+echo "==> pip install -e ${SRC_DIR} ${ARGS[*]:-}"
+if [ "${#ARGS[@]}" -gt 0 ]; then
+  pip install -e "${SRC_DIR}" "${ARGS[@]}"
+else
+  pip install -e "${SRC_DIR}"
+fi
 
 echo
 echo "==> Sanity check: import opentps.core.processing.doseCalculation.protons.MCsquare"

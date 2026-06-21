@@ -103,5 +103,19 @@ def run(plan: PlanDetail) -> Dict[str, Any]:
             "success": bool(res.success),
             "iterations": int(res.nit),
             "final_cost": float(res.fun),
+            # O18 — surface the solver method in qa_summary so the plan report
+            # records which engine produced the weights, matching the
+            # OptimizationService result contract (convergence + solver_method).
+            "solver_method": plan.optimization_method,
         },
     }
+
+
+# O18 note: the legacy plan path above runs OpenTPS' IntensityModulationOptimizer
+# directly on OpenTPS objects (ct/patient/proton_plan). Re-routing it through
+# radiarch.services.optimization.OptimizationService — which is engine-agnostic
+# and keyed on geometry_id/beam_model_id — requires first building Services 1–2
+# (Geometry, Beam Model) inside this workflow under the OpenTPS runtime. That
+# refactor is deferred until the plan path migrates onto the microservice
+# pipeline end-to-end; the OptimizationService is already wired for direct
+# /api/v1/optimize/run use in the meantime.

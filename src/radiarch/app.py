@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .api.routes import info, plans, jobs, artifacts, workflows, sessions, simulations, geometry, beam_model, uploads
+from .api.routes import info, plans, jobs, artifacts, workflows, sessions, simulations, geometry, beam_model, uploads, dose, optimization, bao, evaluation
 from .adapters import build_orthanc_adapter
 from .core.database import init_db
 
@@ -44,6 +44,10 @@ def create_app() -> FastAPI:
     app.include_router(geometry.router, prefix=settings.api_prefix)
     app.include_router(beam_model.router, prefix=settings.api_prefix)
     app.include_router(uploads.router, prefix=settings.api_prefix)
+    app.include_router(dose.router, prefix=settings.api_prefix)
+    app.include_router(optimization.router, prefix=settings.api_prefix)
+    app.include_router(bao.router, prefix=settings.api_prefix)
+    app.include_router(evaluation.router, prefix=settings.api_prefix)
 
     @app.get("/")
     async def root():

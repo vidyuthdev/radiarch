@@ -110,3 +110,92 @@ class BeamModelJobRow(Base):
     started_at = Column(DateTime(timezone=True), nullable=True)
     finished_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class DoseJobRow(Base):
+    """Async tracking row for one ``POST /dose/compute`` or ``/dose/influence``.
+
+    A single table backs both kinds — ``kind`` discriminates and the
+    matching id column (``dose_id`` / ``influence_id``) is populated on
+    success.
+    """
+
+    __tablename__ = "dose_jobs"
+
+    id = Column(String(36), primary_key=True)
+    cache_key = Column(String(64), nullable=False, index=True)
+    kind = Column(String(16), nullable=False, default="dose")
+    state = Column(String(20), nullable=False, default="queued")
+    progress = Column(Float, default=0.0)
+    stage = Column(String(32), nullable=True, default="queued")
+    message = Column(Text, nullable=True)
+    dose_id = Column(String(36), nullable=True)
+    influence_id = Column(String(36), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class OptimizationJobRow(Base):
+    """Async tracking row for one ``POST /optimize/run`` invocation.
+
+    Mirrors :class:`DoseJobRow` minus the dose/influence discriminator —
+    optimization has a single output kind. ``optimization_id`` is populated
+    when the run succeeds so clients polling the jobs endpoint can deep-link
+    to the result.
+    """
+
+    __tablename__ = "optimization_jobs"
+
+    id = Column(String(36), primary_key=True)
+    cache_key = Column(String(64), nullable=False, index=True)
+    state = Column(String(20), nullable=False, default="queued")
+    progress = Column(Float, default=0.0)
+    stage = Column(String(32), nullable=True, default="queued")
+    message = Column(Text, nullable=True)
+    optimization_id = Column(String(36), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class BAOJobRow(Base):
+    """Async tracking row for one ``POST /bao/run`` invocation (Service 5).
+
+    Mirrors :class:`OptimizationJobRow`; ``bao_id`` is populated on success so
+    clients polling the jobs endpoint can deep-link to the result.
+    """
+
+    __tablename__ = "bao_jobs"
+
+    id = Column(String(36), primary_key=True)
+    cache_key = Column(String(64), nullable=False, index=True)
+    state = Column(String(20), nullable=False, default="queued")
+    progress = Column(Float, default=0.0)
+    stage = Column(String(32), nullable=True, default="queued")
+    message = Column(Text, nullable=True)
+    bao_id = Column(String(36), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class EvaluationJobRow(Base):
+    """Async tracking row for one ``POST /evaluate/run`` invocation (Service 6).
+
+    Mirrors :class:`OptimizationJobRow`; ``evaluation_id`` is populated on
+    success.
+    """
+
+    __tablename__ = "evaluation_jobs"
+
+    id = Column(String(36), primary_key=True)
+    cache_key = Column(String(64), nullable=False, index=True)
+    state = Column(String(20), nullable=False, default="queued")
+    progress = Column(Float, default=0.0)
+    stage = Column(String(32), nullable=True, default="queued")
+    message = Column(Text, nullable=True)
+    evaluation_id = Column(String(36), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)

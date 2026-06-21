@@ -56,6 +56,7 @@ from ..models.geometry import (
 ProgressCallback = Callable[[GeometryStage, float, str], None]
 from .hu_density import get_model as get_hu_density_model
 from .persistence import (
+    CT_FILENAME,
     DENSITY_FILENAME,
     GeometryPaths,
     GeometryStore,
@@ -310,10 +311,18 @@ class GeometryService:
         # 2. Pick the target grid.
         target_grid = self._resolve_target_grid(request, source_grid)
 
-        # 3. Resample density if target ≠ source.
+        # 3. Resample density AND CT (in HU) if target ≠ source.
+        #    The CT is needed downstream by engines like MCsquare that
+        #    consume Hounsfield Units directly rather than mass density.
         on_progress(GeometryStage.resampling, 0.45, "Resampling density to target grid")
         density_final = self._maybe_resample(
             density_native, src_affine, source_grid, target_grid
+        )
+        # Resample the raw HU array with the same trilinear kernel so the
+        # CT and density stay perfectly aligned on the persisted grid.
+        ct_final = self._maybe_resample(
+            ct_array.astype(np.float32, copy=False),
+            src_affine, source_grid, target_grid,
         )
 
         # 4. Rasterize contours directly on the target grid.
@@ -334,6 +343,7 @@ class GeometryService:
             geometry_id=geometry_id,
             density_grid_uri=str(paths.density),
             structure_masks_uri=str(paths.masks),
+            ct_grid_uri=str(paths.ct),
             structure_index=structure_index,
             grid_spec=target_grid,
             frame_of_reference_uid=self._frame_of_reference(ct),
@@ -346,6 +356,7 @@ class GeometryService:
             cache_key=cache_key,
             density=density_final,
             masks=masks,
+            ct=ct_final,
             result=result,
         )
         logger.info(

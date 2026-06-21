@@ -16,6 +16,10 @@ from ..models.job import JobStatus, JobState
 from ..models.artifact import ArtifactRecord
 from ..models.geometry import GeometryJobStatus, GeometryStage
 from ..models.beam_model import BeamModelJobStatus, BeamModelStage
+from ..models.dose import DoseJobStatus, DoseStage
+from ..models.optimization import OptimizationJobStatus, OptimizationStage
+from ..models.bao import BAOJobStatus, BAOStage
+from ..models.evaluation import EvaluationJobStatus, EvaluationStage
 
 
 def _utcnow():
@@ -120,6 +124,104 @@ class StoreBase(abc.ABC):
         beam_model_id: Optional[str] = None,
     ) -> Optional[BeamModelJobStatus]: ...
 
+    # ---- Dose async jobs ---------------------------------------------
+
+    @abc.abstractmethod
+    def create_dose_job(self, cache_key: str, kind: str = "dose") -> DoseJobStatus:
+        """Record a new queued dose (or influence) build."""
+        ...
+
+    @abc.abstractmethod
+    def get_dose_job(self, job_id: str) -> Optional[DoseJobStatus]: ...
+
+    @abc.abstractmethod
+    def update_dose_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[DoseStage] = None,
+        dose_id: Optional[str] = None,
+        influence_id: Optional[str] = None,
+    ) -> Optional[DoseJobStatus]: ...
+
+    # ---- Optimization async jobs -------------------------------------
+
+    @abc.abstractmethod
+    def create_optimization_job(self, cache_key: str) -> OptimizationJobStatus:
+        """Record a new queued optimization run."""
+        ...
+
+    @abc.abstractmethod
+    def get_optimization_job(self, job_id: str) -> Optional[OptimizationJobStatus]: ...
+
+    @abc.abstractmethod
+    def update_optimization_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[OptimizationStage] = None,
+        optimization_id: Optional[str] = None,
+    ) -> Optional[OptimizationJobStatus]: ...
+
+    @abc.abstractmethod
+    def list_optimization_jobs(self) -> List[OptimizationJobStatus]: ...
+
+    # ---- BAO async jobs ----------------------------------------------
+
+    @abc.abstractmethod
+    def create_bao_job(self, cache_key: str) -> BAOJobStatus:
+        """Record a new queued beam-angle-optimization run."""
+        ...
+
+    @abc.abstractmethod
+    def get_bao_job(self, job_id: str) -> Optional[BAOJobStatus]: ...
+
+    @abc.abstractmethod
+    def update_bao_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[BAOStage] = None,
+        bao_id: Optional[str] = None,
+    ) -> Optional[BAOJobStatus]: ...
+
+    @abc.abstractmethod
+    def list_bao_jobs(self) -> List[BAOJobStatus]: ...
+
+    # ---- Evaluation async jobs ---------------------------------------
+
+    @abc.abstractmethod
+    def create_evaluation_job(self, cache_key: str) -> EvaluationJobStatus:
+        """Record a new queued evaluation run."""
+        ...
+
+    @abc.abstractmethod
+    def get_evaluation_job(self, job_id: str) -> Optional[EvaluationJobStatus]: ...
+
+    @abc.abstractmethod
+    def update_evaluation_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[EvaluationStage] = None,
+        evaluation_id: Optional[str] = None,
+    ) -> Optional[EvaluationJobStatus]: ...
+
+    @abc.abstractmethod
+    def list_evaluation_jobs(self) -> List[EvaluationJobStatus]: ...
+
 
 # ---------------------------------------------------------------------------
 # In-memory implementation (used in tests & dev)
@@ -132,6 +234,10 @@ class InMemoryStore(StoreBase):
         self._artifacts: Dict[str, ArtifactRecord] = {}
         self._geometry_jobs: Dict[str, GeometryJobStatus] = {}
         self._beam_model_jobs: Dict[str, BeamModelJobStatus] = {}
+        self._dose_jobs: Dict[str, DoseJobStatus] = {}
+        self._optimization_jobs: Dict[str, OptimizationJobStatus] = {}
+        self._bao_jobs: Dict[str, BAOJobStatus] = {}
+        self._evaluation_jobs: Dict[str, EvaluationJobStatus] = {}
 
     def create_plan(self, payload: PlanRequest) -> tuple[PlanDetail, JobStatus]:
         plan_id = str(uuid.uuid4())
@@ -360,6 +466,217 @@ class InMemoryStore(StoreBase):
         updated = BeamModelJobStatus(**data)
         self._beam_model_jobs[job_id] = updated
         return updated
+
+    # ---- Dose async jobs ---------------------------------------------
+
+    def create_dose_job(self, cache_key: str, kind: str = "dose") -> DoseJobStatus:
+        job_id = str(uuid.uuid4())
+        now = _utcnow()
+        job = DoseJobStatus(
+            id=job_id,
+            cache_key=cache_key,
+            kind=kind,
+            state=JobState.queued,
+            progress=0.0,
+            stage=DoseStage.queued,
+            created_at=now,
+        )
+        self._dose_jobs[job_id] = job
+        return job
+
+    def get_dose_job(self, job_id: str) -> Optional[DoseJobStatus]:
+        return self._dose_jobs.get(job_id)
+
+    def update_dose_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[DoseStage] = None,
+        dose_id: Optional[str] = None,
+        influence_id: Optional[str] = None,
+    ) -> Optional[DoseJobStatus]:
+        job = self._dose_jobs.get(job_id)
+        if not job:
+            return None
+        data = job.model_dump()
+        now = _utcnow()
+        if state:
+            data["state"] = state
+            if state == JobState.running and not data.get("started_at"):
+                data["started_at"] = now
+            if state in {JobState.succeeded, JobState.failed, JobState.cancelled}:
+                data["finished_at"] = now
+        if progress is not None:
+            data["progress"] = progress
+        if message is not None:
+            data["message"] = message
+        if stage is not None:
+            data["stage"] = stage
+        if dose_id is not None:
+            data["dose_id"] = dose_id
+        if influence_id is not None:
+            data["influence_id"] = influence_id
+        updated = DoseJobStatus(**data)
+        self._dose_jobs[job_id] = updated
+        return updated
+
+    # ---- Optimization async jobs -------------------------------------
+
+    def create_optimization_job(self, cache_key: str) -> OptimizationJobStatus:
+        job_id = str(uuid.uuid4())
+        now = _utcnow()
+        job = OptimizationJobStatus(
+            id=job_id,
+            cache_key=cache_key,
+            state=JobState.queued,
+            progress=0.0,
+            stage=OptimizationStage.queued,
+            created_at=now,
+        )
+        self._optimization_jobs[job_id] = job
+        return job
+
+    def get_optimization_job(self, job_id: str) -> Optional[OptimizationJobStatus]:
+        return self._optimization_jobs.get(job_id)
+
+    def update_optimization_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[OptimizationStage] = None,
+        optimization_id: Optional[str] = None,
+    ) -> Optional[OptimizationJobStatus]:
+        job = self._optimization_jobs.get(job_id)
+        if not job:
+            return None
+        data = job.model_dump()
+        now = _utcnow()
+        if state:
+            data["state"] = state
+            if state == JobState.running and not data.get("started_at"):
+                data["started_at"] = now
+            if state in {JobState.succeeded, JobState.failed, JobState.cancelled}:
+                data["finished_at"] = now
+        if progress is not None:
+            data["progress"] = progress
+        if message is not None:
+            data["message"] = message
+        if stage is not None:
+            data["stage"] = stage
+        if optimization_id is not None:
+            data["optimization_id"] = optimization_id
+        updated = OptimizationJobStatus(**data)
+        self._optimization_jobs[job_id] = updated
+        return updated
+
+    def list_optimization_jobs(self) -> List[OptimizationJobStatus]:
+        return list(self._optimization_jobs.values())
+
+    # ---- BAO async jobs ----------------------------------------------
+
+    def create_bao_job(self, cache_key: str) -> BAOJobStatus:
+        job_id = str(uuid.uuid4())
+        job = BAOJobStatus(
+            id=job_id, cache_key=cache_key, state=JobState.queued,
+            progress=0.0, stage=BAOStage.queued, created_at=_utcnow(),
+        )
+        self._bao_jobs[job_id] = job
+        return job
+
+    def get_bao_job(self, job_id: str) -> Optional[BAOJobStatus]:
+        return self._bao_jobs.get(job_id)
+
+    def update_bao_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[BAOStage] = None,
+        bao_id: Optional[str] = None,
+    ) -> Optional[BAOJobStatus]:
+        job = self._bao_jobs.get(job_id)
+        if not job:
+            return None
+        data = job.model_dump()
+        now = _utcnow()
+        if state:
+            data["state"] = state
+            if state == JobState.running and not data.get("started_at"):
+                data["started_at"] = now
+            if state in {JobState.succeeded, JobState.failed, JobState.cancelled}:
+                data["finished_at"] = now
+        if progress is not None:
+            data["progress"] = progress
+        if message is not None:
+            data["message"] = message
+        if stage is not None:
+            data["stage"] = stage
+        if bao_id is not None:
+            data["bao_id"] = bao_id
+        updated = BAOJobStatus(**data)
+        self._bao_jobs[job_id] = updated
+        return updated
+
+    def list_bao_jobs(self) -> List[BAOJobStatus]:
+        return list(self._bao_jobs.values())
+
+    # ---- Evaluation async jobs ---------------------------------------
+
+    def create_evaluation_job(self, cache_key: str) -> EvaluationJobStatus:
+        job_id = str(uuid.uuid4())
+        job = EvaluationJobStatus(
+            id=job_id, cache_key=cache_key, state=JobState.queued,
+            progress=0.0, stage=EvaluationStage.queued, created_at=_utcnow(),
+        )
+        self._evaluation_jobs[job_id] = job
+        return job
+
+    def get_evaluation_job(self, job_id: str) -> Optional[EvaluationJobStatus]:
+        return self._evaluation_jobs.get(job_id)
+
+    def update_evaluation_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[EvaluationStage] = None,
+        evaluation_id: Optional[str] = None,
+    ) -> Optional[EvaluationJobStatus]:
+        job = self._evaluation_jobs.get(job_id)
+        if not job:
+            return None
+        data = job.model_dump()
+        now = _utcnow()
+        if state:
+            data["state"] = state
+            if state == JobState.running and not data.get("started_at"):
+                data["started_at"] = now
+            if state in {JobState.succeeded, JobState.failed, JobState.cancelled}:
+                data["finished_at"] = now
+        if progress is not None:
+            data["progress"] = progress
+        if message is not None:
+            data["message"] = message
+        if stage is not None:
+            data["stage"] = stage
+        if evaluation_id is not None:
+            data["evaluation_id"] = evaluation_id
+        updated = EvaluationJobStatus(**data)
+        self._evaluation_jobs[job_id] = updated
+        return updated
+
+    def list_evaluation_jobs(self) -> List[EvaluationJobStatus]:
+        return list(self._evaluation_jobs.values())
 
 
 # ---------------------------------------------------------------------------
@@ -737,6 +1054,384 @@ class SQLStore(StoreBase):
             stage=row.stage,
             message=row.message,
             beam_model_id=row.beam_model_id,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            created_at=row.created_at,
+        )
+
+    # ---- Dose async jobs ---------------------------------------------
+
+    def create_dose_job(self, cache_key: str, kind: str = "dose") -> DoseJobStatus:
+        from .db_models import DoseJobRow
+
+        job_id = str(uuid.uuid4())
+        now = _utcnow()
+        session = self._session()
+        try:
+            row = DoseJobRow(
+                id=job_id,
+                cache_key=cache_key,
+                kind=kind,
+                state=JobState.queued.value,
+                progress=0.0,
+                stage=DoseStage.queued.value,
+                created_at=now,
+            )
+            session.add(row)
+            session.commit()
+            return self._dose_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def get_dose_job(self, job_id: str) -> Optional[DoseJobStatus]:
+        from .db_models import DoseJobRow
+
+        session = self._session()
+        try:
+            row = session.query(DoseJobRow).filter_by(id=job_id).first()
+            if not row:
+                return None
+            return self._dose_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def update_dose_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[DoseStage] = None,
+        dose_id: Optional[str] = None,
+        influence_id: Optional[str] = None,
+    ) -> Optional[DoseJobStatus]:
+        from .db_models import DoseJobRow
+
+        session = self._session()
+        try:
+            row = session.query(DoseJobRow).filter_by(id=job_id).first()
+            if not row:
+                return None
+            now = _utcnow()
+            if state:
+                row.state = state.value if hasattr(state, "value") else state
+                if state == JobState.running and not row.started_at:
+                    row.started_at = now
+                if state in {JobState.succeeded, JobState.failed, JobState.cancelled}:
+                    row.finished_at = now
+            if progress is not None:
+                row.progress = progress
+            if message is not None:
+                row.message = message
+            if stage is not None:
+                row.stage = stage.value if hasattr(stage, "value") else stage
+            if dose_id is not None:
+                row.dose_id = dose_id
+            if influence_id is not None:
+                row.influence_id = influence_id
+            session.commit()
+            return self._dose_job_row_to_status(row)
+        finally:
+            session.close()
+
+    @staticmethod
+    def _dose_job_row_to_status(row) -> DoseJobStatus:
+        return DoseJobStatus(
+            id=row.id,
+            cache_key=row.cache_key,
+            kind=row.kind,
+            state=row.state,
+            progress=row.progress or 0.0,
+            stage=row.stage,
+            message=row.message,
+            dose_id=row.dose_id,
+            influence_id=row.influence_id,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            created_at=row.created_at,
+        )
+
+    # ---- Optimization async jobs -------------------------------------
+
+    def create_optimization_job(self, cache_key: str) -> OptimizationJobStatus:
+        from .db_models import OptimizationJobRow
+
+        job_id = str(uuid.uuid4())
+        now = _utcnow()
+        session = self._session()
+        try:
+            row = OptimizationJobRow(
+                id=job_id,
+                cache_key=cache_key,
+                state=JobState.queued.value,
+                progress=0.0,
+                stage=OptimizationStage.queued.value,
+                created_at=now,
+            )
+            session.add(row)
+            session.commit()
+            return self._optimization_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def get_optimization_job(self, job_id: str) -> Optional[OptimizationJobStatus]:
+        from .db_models import OptimizationJobRow
+
+        session = self._session()
+        try:
+            row = session.query(OptimizationJobRow).filter_by(id=job_id).first()
+            if not row:
+                return None
+            return self._optimization_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def update_optimization_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[OptimizationStage] = None,
+        optimization_id: Optional[str] = None,
+    ) -> Optional[OptimizationJobStatus]:
+        from .db_models import OptimizationJobRow
+
+        session = self._session()
+        try:
+            row = session.query(OptimizationJobRow).filter_by(id=job_id).first()
+            if not row:
+                return None
+            now = _utcnow()
+            if state:
+                row.state = state.value if hasattr(state, "value") else state
+                if state == JobState.running and not row.started_at:
+                    row.started_at = now
+                if state in {JobState.succeeded, JobState.failed, JobState.cancelled}:
+                    row.finished_at = now
+            if progress is not None:
+                row.progress = progress
+            if message is not None:
+                row.message = message
+            if stage is not None:
+                row.stage = stage.value if hasattr(stage, "value") else stage
+            if optimization_id is not None:
+                row.optimization_id = optimization_id
+            session.commit()
+            return self._optimization_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def list_optimization_jobs(self) -> List[OptimizationJobStatus]:
+        from .db_models import OptimizationJobRow
+
+        session = self._session()
+        try:
+            rows = (session.query(OptimizationJobRow)
+                    .order_by(OptimizationJobRow.created_at.desc()).all())
+            return [self._optimization_job_row_to_status(r) for r in rows]
+        finally:
+            session.close()
+
+    @staticmethod
+    def _optimization_job_row_to_status(row) -> OptimizationJobStatus:
+        return OptimizationJobStatus(
+            id=row.id,
+            cache_key=row.cache_key,
+            state=row.state,
+            progress=row.progress or 0.0,
+            stage=row.stage,
+            message=row.message,
+            optimization_id=row.optimization_id,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            created_at=row.created_at,
+        )
+
+    # ---- BAO async jobs ----------------------------------------------
+
+    def create_bao_job(self, cache_key: str) -> BAOJobStatus:
+        from .db_models import BAOJobRow
+
+        job_id = str(uuid.uuid4())
+        now = _utcnow()
+        session = self._session()
+        try:
+            row = BAOJobRow(
+                id=job_id, cache_key=cache_key, state=JobState.queued.value,
+                progress=0.0, stage=BAOStage.queued.value, created_at=now,
+            )
+            session.add(row)
+            session.commit()
+            return self._bao_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def get_bao_job(self, job_id: str) -> Optional[BAOJobStatus]:
+        from .db_models import BAOJobRow
+
+        session = self._session()
+        try:
+            row = session.query(BAOJobRow).filter_by(id=job_id).first()
+            if not row:
+                return None
+            return self._bao_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def update_bao_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[BAOStage] = None,
+        bao_id: Optional[str] = None,
+    ) -> Optional[BAOJobStatus]:
+        from .db_models import BAOJobRow
+
+        session = self._session()
+        try:
+            row = session.query(BAOJobRow).filter_by(id=job_id).first()
+            if not row:
+                return None
+            now = _utcnow()
+            if state:
+                row.state = state.value if hasattr(state, "value") else state
+                if state == JobState.running and not row.started_at:
+                    row.started_at = now
+                if state in {JobState.succeeded, JobState.failed, JobState.cancelled}:
+                    row.finished_at = now
+            if progress is not None:
+                row.progress = progress
+            if message is not None:
+                row.message = message
+            if stage is not None:
+                row.stage = stage.value if hasattr(stage, "value") else stage
+            if bao_id is not None:
+                row.bao_id = bao_id
+            session.commit()
+            return self._bao_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def list_bao_jobs(self) -> List[BAOJobStatus]:
+        from .db_models import BAOJobRow
+
+        session = self._session()
+        try:
+            rows = session.query(BAOJobRow).order_by(BAOJobRow.created_at.desc()).all()
+            return [self._bao_job_row_to_status(r) for r in rows]
+        finally:
+            session.close()
+
+    @staticmethod
+    def _bao_job_row_to_status(row) -> BAOJobStatus:
+        return BAOJobStatus(
+            id=row.id,
+            cache_key=row.cache_key,
+            state=row.state,
+            progress=row.progress or 0.0,
+            stage=row.stage,
+            message=row.message,
+            bao_id=row.bao_id,
+            started_at=row.started_at,
+            finished_at=row.finished_at,
+            created_at=row.created_at,
+        )
+
+    # ---- Evaluation async jobs ---------------------------------------
+
+    def create_evaluation_job(self, cache_key: str) -> EvaluationJobStatus:
+        from .db_models import EvaluationJobRow
+
+        job_id = str(uuid.uuid4())
+        now = _utcnow()
+        session = self._session()
+        try:
+            row = EvaluationJobRow(
+                id=job_id, cache_key=cache_key, state=JobState.queued.value,
+                progress=0.0, stage=EvaluationStage.queued.value, created_at=now,
+            )
+            session.add(row)
+            session.commit()
+            return self._evaluation_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def get_evaluation_job(self, job_id: str) -> Optional[EvaluationJobStatus]:
+        from .db_models import EvaluationJobRow
+
+        session = self._session()
+        try:
+            row = session.query(EvaluationJobRow).filter_by(id=job_id).first()
+            if not row:
+                return None
+            return self._evaluation_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def update_evaluation_job(
+        self,
+        job_id: str,
+        *,
+        state: Optional[JobState] = None,
+        progress: Optional[float] = None,
+        message: Optional[str] = None,
+        stage: Optional[EvaluationStage] = None,
+        evaluation_id: Optional[str] = None,
+    ) -> Optional[EvaluationJobStatus]:
+        from .db_models import EvaluationJobRow
+
+        session = self._session()
+        try:
+            row = session.query(EvaluationJobRow).filter_by(id=job_id).first()
+            if not row:
+                return None
+            now = _utcnow()
+            if state:
+                row.state = state.value if hasattr(state, "value") else state
+                if state == JobState.running and not row.started_at:
+                    row.started_at = now
+                if state in {JobState.succeeded, JobState.failed, JobState.cancelled}:
+                    row.finished_at = now
+            if progress is not None:
+                row.progress = progress
+            if message is not None:
+                row.message = message
+            if stage is not None:
+                row.stage = stage.value if hasattr(stage, "value") else stage
+            if evaluation_id is not None:
+                row.evaluation_id = evaluation_id
+            session.commit()
+            return self._evaluation_job_row_to_status(row)
+        finally:
+            session.close()
+
+    def list_evaluation_jobs(self) -> List[EvaluationJobStatus]:
+        from .db_models import EvaluationJobRow
+
+        session = self._session()
+        try:
+            rows = (session.query(EvaluationJobRow)
+                    .order_by(EvaluationJobRow.created_at.desc()).all())
+            return [self._evaluation_job_row_to_status(r) for r in rows]
+        finally:
+            session.close()
+
+    @staticmethod
+    def _evaluation_job_row_to_status(row) -> EvaluationJobStatus:
+        return EvaluationJobStatus(
+            id=row.id,
+            cache_key=row.cache_key,
+            state=row.state,
+            progress=row.progress or 0.0,
+            stage=row.stage,
+            message=row.message,
+            evaluation_id=row.evaluation_id,
             started_at=row.started_at,
             finished_at=row.finished_at,
             created_at=row.created_at,

@@ -44,6 +44,7 @@ from ..models.geometry import GeometryResult, GridSpec
 
 DENSITY_FILENAME = "density.nii.gz"
 MASKS_FILENAME = "masks.nii.gz"
+CT_FILENAME = "ct.nii.gz"
 META_FILENAME = "meta.json"
 INDEX_FILENAME = "_index.json"
 
@@ -108,11 +109,17 @@ def _read_nifti(path: Path) -> Tuple[np.ndarray, GridSpec]:
 
 @dataclass
 class GeometryPaths:
-    """Convenience bundle of the final on-disk paths for one geometry."""
+    """Convenience bundle of the final on-disk paths for one geometry.
+
+    ``ct`` is the resampled HU volume — present for all geometries built
+    since the D6.1 change. Older cached geometries won't have the file
+    on disk; readers should treat its absence as "no CT available".
+    """
 
     root: Path
     density: Path
     masks: Path
+    ct: Path
     meta: Path
 
     @classmethod
@@ -122,6 +129,7 @@ class GeometryPaths:
             root=root,
             density=root / DENSITY_FILENAME,
             masks=root / MASKS_FILENAME,
+            ct=root / CT_FILENAME,
             meta=root / META_FILENAME,
         )
 
@@ -187,18 +195,32 @@ class GeometryStore:
         density: np.ndarray,
         masks: np.ndarray,
         result: GeometryResult,
+        ct: Optional[np.ndarray] = None,
     ) -> GeometryPaths:
-        """Write density + masks + meta atomically, then update the cache index."""
+        """Write density + masks (+ optional CT) + meta atomically, then update the cache index.
+
+        ``ct`` is the CT volume in Hounsfield Units on the target grid
+        (same shape as ``density``). When provided, it's written as
+        ``ct.nii.gz`` and the caller is responsible for setting
+        ``result.ct_grid_uri`` to the matching path. Omitted CTs are not
+        an error — the analytic engine doesn't need one — but engines
+        like MCsquare that depend on a real CT will then refuse to run.
+        """
         paths = GeometryPaths.for_id(self.base_dir, geometry_id)
         # Use a sibling .tmp dir so the final rename is on the same fs.
         with tempfile.TemporaryDirectory(dir=self.base_dir, prefix=f".{geometry_id}.tmp.") as tmp:
             tmp_path = Path(tmp)
             tmp_density = tmp_path / DENSITY_FILENAME
             tmp_masks = tmp_path / MASKS_FILENAME
+            tmp_ct = tmp_path / CT_FILENAME
             tmp_meta = tmp_path / META_FILENAME
 
             _write_nifti(density.astype(np.float32, copy=False), result.grid_spec, tmp_density)
             _write_nifti(masks.astype(np.uint16, copy=False), result.grid_spec, tmp_masks)
+            if ct is not None:
+                # Store CT as int16 — it's HU, which fits nicely and halves
+                # the file size vs float32.
+                _write_nifti(ct.astype(np.int16, copy=False), result.grid_spec, tmp_ct)
             tmp_meta.write_text(result.model_dump_json(indent=2))
 
             # Atomic replace: if paths.root already exists (retry of a
@@ -269,6 +291,7 @@ class GeometryStore:
 __all__ = [
     "DENSITY_FILENAME",
     "MASKS_FILENAME",
+    "CT_FILENAME",
     "META_FILENAME",
     "INDEX_FILENAME",
     "GeometryPaths",
