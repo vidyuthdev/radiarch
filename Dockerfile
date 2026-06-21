@@ -24,6 +24,12 @@ COPY --from=builder /install /usr/local
 # Copy application source
 COPY src/ ./
 
+# Ensure the vendored MCsquare Monte Carlo binaries are executable (COPY can
+# drop the +x bit depending on the build context). The Celery worker invokes
+# MCsquare_linux* for real proton dose; without +x it fails with EACCES.
+RUN chmod +x /app/opentps/core/processing/doseCalculation/protons/MCsquare/MCsquare* \
+    2>/dev/null || true
+
 # Create data directories
 RUN mkdir -p /data/artifacts /data/sessions
 

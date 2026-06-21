@@ -39,8 +39,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # MCsquare ships Linux x86-64 binaries only; force amd64 so they run
+    # (under Rosetta/QEMU emulation) on Apple Silicon / arm64 hosts.
+    platform: linux/amd64
+    # Consume every per-service queue. Tasks route to dose/optimize/evaluate/
+    # maintenance via task_routes; in production eager mode is OFF, so a worker
+    # with no -Q (default 'celery' queue only) would silently ignore them.
     command: >
-      celery -A radiarch.tasks.celery_app worker --loglevel=info --concurrency=2
+      celery -A radiarch.tasks.celery_app worker --loglevel=info
+      --concurrency=2 -Q celery,dose,optimize,evaluate,maintenance
     env_file: .env
     environment:
       - PYTHONPATH=/app
