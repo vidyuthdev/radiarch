@@ -5,12 +5,19 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  # Allow the MCsquare validation job to be run on demand from the Actions tab.
+  workflow_dispatch:
+  # Nightly real-MCsquare validation (03:17 UTC) — keeps the V4 physics gate
+  # exercised regularly without making it block every PR.
+  schedule:
+    - cron: "17 3 * * *"
 
 jobs:
   fast-tests:
     name: Fast Tests (API + Backend)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
 
     steps:
       - name: Checkout (sparse — skip large binaries and test data)
@@ -34,13 +41,18 @@ jobs:
           pip install --upgrade pip setuptools wheel
           pip install -e ./src[dev]
 
-      - name: Run fast tests (74 tests)
+      - name: Run fast tests
         run: python -m pytest tests/test_api_e2e.py tests/test_client.py tests/opentps/core/test_api_backend.py -v
 
   full-tests:
-    name: Full Tests (including MCsquare)
+    # The full suite incl. Services 3-6 on the analytic engine. The real-MCsquare
+    # V4 validation auto-skips here (RADIARCH_RUN_MCSQUARE_VALIDATION unset) —
+    # Monte Carlo is slow / tolerance-sensitive, so it runs in mcsquare-validation
+    # below instead of blocking every PR.
+    name: Full Tests (Services 1-6, analytic engine)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
 
     steps:
       - name: Checkout (full — includes MCsquare binaries and DICOM test data)
@@ -56,5 +68,34 @@ jobs:
           pip install --upgrade pip setuptools wheel
           pip install -e ./src[dev]
 
-      - name: Run all tests (92 tests)
+      - name: Run full suite (MCsquare V4 validation auto-skips)
         run: python -m pytest tests/ -v --tb=short
+
+  mcsquare-validation:
+    # Opt-in V4 gate: real MCsquare Monte Carlo on the SimpleFantom (Dij vs dose
+    # consistency). Runs nightly and on manual dispatch — not on PRs — because
+    # Monte Carlo is slow and tolerance-sensitive. The Linux runner has the
+    # MCsquare_linux binary, so this is where the real physics actually executes.
+    name: MCsquare Validation (nightly / manual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout (full — includes MCsquare binaries and DICOM test data)
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install -e ./src[dev]
+
+      - name: Run real-MCsquare V4 validation
+        env:
+          RADIARCH_RUN_MCSQUARE_VALIDATION: "1"
+        run: python -m pytest tests/test_mcsquare_dij_consistency.py -v --tb=short

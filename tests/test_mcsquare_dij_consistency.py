@@ -221,14 +221,26 @@ def _bundled_simplefantom_available() -> bool:
             / "SimpleFantomWithStruct").is_dir()
 
 
-# Skip the whole class if the prerequisites aren't present — these
-# tests are meant to run on machines doing real validation work.
+# Real Monte Carlo is slow and tolerance-sensitive, so it's opt-in rather than
+# run on every CI push: it's the V4 *validation* gate (TASKS.md), meant to run
+# deliberately on a machine with the MCsquare binary — not to block routine PRs
+# with stochastic flakiness. Enable with RADIARCH_RUN_MCSQUARE_VALIDATION=1
+# (the nightly / manual "MCsquare Validation" CI job sets it). The analytic
+# TestAnalyticDijConsistency above always runs and proves the Dij math itself.
+def _mcsquare_validation_enabled() -> bool:
+    return os.environ.get("RADIARCH_RUN_MCSQUARE_VALIDATION", "").lower() \
+        not in ("", "0", "false", "no")
+
+
 pytestmark_real_mcsquare = pytest.mark.skipif(
-    not (_opentps_importable() and _bundled_simplefantom_available()),
+    not (_mcsquare_validation_enabled()
+         and _opentps_importable()
+         and _bundled_simplefantom_available()),
     reason=(
-        "Real-MCsquare Dij test requires OpenTPS importable and "
-        "tests/opentps/core/opentps-testData/SimpleFantomWithStruct "
-        "to be present. Run on a validation machine."
+        "Real-MCsquare V4 validation is opt-in: set "
+        "RADIARCH_RUN_MCSQUARE_VALIDATION=1 on a machine with the MCsquare "
+        "binary + SimpleFantom test data (Monte Carlo is slow / "
+        "tolerance-sensitive, so it's excluded from routine CI)."
     ),
 )
 
