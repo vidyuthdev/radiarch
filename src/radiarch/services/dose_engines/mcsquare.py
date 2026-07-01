@@ -119,6 +119,49 @@ _DEFAULT_CALIBRATION: Any = None
 _DEFAULT_BDL: Any = None
 
 
+def _reorder_dij_rows_to_c_order(csr: Any, dose_grid_size: tuple) -> Any:
+    """Remap MCsquare Dij rows into C-order-of-imageArray voxel order.
+
+    MCsquare/OpenTPS stores beamlet rows in MCsquare's *native* voxel order:
+    an F-order (column-major) flatten of the dose grid, *pre-flip*. OpenTPS's
+    canonical reconstruction — ``SparseBeamlets.toDoseImage()`` and the
+    direct-dose ``readDose()`` path (``mcsquareIO.py``) — both rebuild the
+    dose volume as::
+
+        reshape(doseGridSize, order='F') → flip(axis 0) → flip(axis 1)
+
+    ``compute_dose`` returns that already-flipped ``imageArray``. But
+    :meth:`MCsquareEngine.apply_influence` reshapes ``Dij @ w`` in plain
+    C-order with no flips, so without this remap the beamlet dose is scrambled
+    relative to ``compute_dose`` — the V4 nightly saw ~100% median / 5746% max
+    relative error purely from this frame mismatch.
+
+    Reordering the CSR *rows* here (rather than special-casing apply_influence)
+    means the persisted ``InfluenceData`` is convention-consistent with both
+    ``compute_dose`` and the analytic engine's Dij: a plain C-order reshape to
+    the geometry grid reproduces exactly what ``compute_dose`` returns.
+
+    Falls back to the input unchanged (with a warning) if ``dose_grid_size`` is
+    missing or inconsistent with the row count, so a metadata gap degrades to
+    the old behavior rather than raising.
+    """
+    n_rows = csr.shape[0]
+    if (len(dose_grid_size) != 3
+            or not all(g > 0 for g in dose_grid_size)
+            or int(np.prod(dose_grid_size)) != n_rows):
+        logger.warning(
+            "MCsquare doseGridSize {} inconsistent with Dij rows {}; "
+            "skipping voxel-frame remap (Dij@w may be misaligned).",
+            dose_grid_size, n_rows,
+        )
+        return csr
+    row_order = np.arange(n_rows).reshape(dose_grid_size, order="F")
+    row_order = np.flip(row_order, 0)
+    row_order = np.flip(row_order, 1)
+    row_order = row_order.ravel(order="C")
+    return csr[row_order, :].tocsr()
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -353,6 +396,14 @@ class MCsquareEngine:
             csr = sparse_beamlets.toSparseMatrix().tocsr().astype(np.float32)
         except AttributeError:
             csr = sparse_beamlets.matrix.tocsr().astype(np.float32)
+
+        # --- Align the Dij voxel frame with compute_dose (critical) -----
+        # See _reorder_dij_rows_to_c_order for the full rationale: MCsquare
+        # stores beamlet rows in its native F-order/pre-flip voxel order, but
+        # apply_influence reshapes Dij@w in plain C-order — so we remap the
+        # rows now to keep the two dose frames identical.
+        grid_size = tuple(int(x) for x in sparse_beamlets.doseGridSize)
+        csr = _reorder_dij_rows_to_c_order(csr, grid_size)
 
         n_voxels = csr.shape[0]
         n_elements = csr.shape[1]

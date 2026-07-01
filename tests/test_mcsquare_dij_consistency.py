@@ -203,6 +203,100 @@ class TestAnalyticDijConsistency:
 
 
 # ---------------------------------------------------------------------------
+# Layer 1b — MCsquare Dij voxel-frame remap (always-on, no MCsquare binary)
+# ---------------------------------------------------------------------------
+
+class TestMCsquareDijRowRemap:
+    """Guard the fix for the V4 nightly failure without needing MCsquare.
+
+    MCsquare stores Dij rows in its native F-order/pre-flip voxel order;
+    OpenTPS reconstructs dose as reshape(gridSize,'F') → flip(0) → flip(1)
+    (both SparseBeamlets.toDoseImage and the direct readDose path). Our
+    apply_influence reshapes Dij@w in plain C-order, so build_influence must
+    remap the rows. This exercises that remap against OpenTPS's exact
+    reconstruction on a synthetic sparse matrix — the same math the real
+    engine relies on, so a regression here fails fast on every CI build
+    instead of only on the nightly Monte-Carlo run.
+    """
+
+    @staticmethod
+    def _opentps_reconstruction(dose_flat, grid_size):
+        """OpenTPS's canonical sparse-beamlets → dose volume transform."""
+        vol = np.reshape(dose_flat, grid_size, order="F")
+        vol = np.flip(vol, 0)
+        vol = np.flip(vol, 1)
+        return vol
+
+    @pytest.mark.parametrize("grid_size", [(5, 4, 3), (8, 8, 8), (6, 5, 4)])
+    @pytest.mark.parametrize("seed", [0, 1, 20260701])
+    def test_remap_matches_opentps_reconstruction(self, grid_size, seed):
+        from scipy.sparse import random as sparse_random
+
+        from radiarch.services.dose_engines.mcsquare import (
+            _reorder_dij_rows_to_c_order,
+        )
+
+        n_vox = int(np.prod(grid_size))
+        n_beamlets = 7
+        rng = np.random.default_rng(seed)
+        # Native-order Dij: rows are MCsquare's F-order/pre-flip voxels.
+        dij = sparse_random(
+            n_vox, n_beamlets, density=0.3, format="csr",
+            random_state=seed, dtype=np.float32,
+        )
+        w = rng.uniform(0.5, 2.0, size=n_beamlets).astype(np.float32)
+
+        # Reference: OpenTPS reconstructs from the *native* rows.
+        want = self._opentps_reconstruction(np.asarray(dij @ w), grid_size)
+
+        # Fix: remap rows, then apply_influence's plain C-order reshape.
+        remapped = _reorder_dij_rows_to_c_order(dij, grid_size)
+        got = np.asarray(remapped @ w).reshape(grid_size)  # C-order
+
+        assert got.shape == want.shape
+        np.testing.assert_allclose(got, want, rtol=1e-6, atol=1e-6)
+
+    def test_remap_is_a_pure_permutation(self):
+        """No values invented or dropped — same multiset of rows."""
+        from scipy.sparse import random as sparse_random
+
+        from radiarch.services.dose_engines.mcsquare import (
+            _reorder_dij_rows_to_c_order,
+        )
+
+        grid_size = (5, 4, 3)
+        dij = sparse_random(
+            int(np.prod(grid_size)), 4, density=0.5, format="csr",
+            random_state=3, dtype=np.float32,
+        )
+        remapped = _reorder_dij_rows_to_c_order(dij, grid_size)
+        assert remapped.shape == dij.shape
+        # Row sums are preserved under a pure row permutation.
+        np.testing.assert_allclose(
+            np.sort(np.asarray(dij.sum(axis=1)).ravel()),
+            np.sort(np.asarray(remapped.sum(axis=1)).ravel()),
+            rtol=1e-6, atol=1e-6,
+        )
+
+    def test_remap_degrades_gracefully_on_bad_grid(self):
+        """A missing/inconsistent doseGridSize returns the matrix unchanged."""
+        from scipy.sparse import random as sparse_random
+
+        from radiarch.services.dose_engines.mcsquare import (
+            _reorder_dij_rows_to_c_order,
+        )
+
+        dij = sparse_random(60, 4, density=0.5, format="csr", random_state=1)
+        # prod != n_rows → skip remap, don't raise.
+        out = _reorder_dij_rows_to_c_order(dij, (5, 4, 2))
+        assert out.shape == dij.shape
+        assert (out != dij).nnz == 0  # unchanged
+        # Zero/degenerate grid → also unchanged.
+        out2 = _reorder_dij_rows_to_c_order(dij, (0, 0, 0))
+        assert (out2 != dij).nnz == 0
+
+
+# ---------------------------------------------------------------------------
 # Layer 2 — Real MCsquare (auto-skipped without OpenTPS)
 # ---------------------------------------------------------------------------
 
